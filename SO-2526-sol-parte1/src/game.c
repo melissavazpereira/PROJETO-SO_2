@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <pthread.h>
+#include <fcntl.h>
+#include <errno.h>
 
 #define CONTINUE_PLAY 0
 #define NEXT_LEVEL 1
@@ -21,6 +23,8 @@ typedef struct {
 } ghost_thread_arg_t;
 
 int thread_shutdown = 0;
+pthread_mutex_t cmd_lock = PTHREAD_MUTEX_INITIALIZER;
+char last_client_cmd = ' ';
 
 int create_backup() {
     // clear the terminal for process transition
@@ -80,9 +84,11 @@ void* pacman_thread(void *arg) {
         command_t* play;
         command_t c;
         if (pacman->n_moves == 0) {
-            c.command = get_input();
+            pthread_mutex_lock(&cmd_lock);
+            c.command = last_client_cmd;
+            pthread_mutex_unlock(&cmd_lock);
 
-            if(c.command == '\0') {
+            if (c.command == ' ') {
                 continue;
             }
 
@@ -96,15 +102,15 @@ void* pacman_thread(void *arg) {
         debug("KEY %c\n", play->command);
 
         // QUIT
-        if (play->command == 'Q') {
-            *retval = QUIT_GAME;
-            return (void*) retval;
-        }
+        //if (play->command == 'Q') {
+        //    *retval = QUIT_GAME;
+        //    return (void*) retval;
+        //}
         // FORK
-        if (play->command == 'G') {
-            *retval = CREATE_BACKUP;
-            return (void*) retval;
-        }
+        //if (play->command == 'G') {
+        //    *retval = CREATE_BACKUP;
+        //    return (void*) retval;
+        //}
 
         pthread_rwlock_rdlock(&board->state_lock);
 
@@ -156,6 +162,30 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    char *fifo_pathname = argv[3];
+
+    if (unlink(fifo_pathname) != 0  && errno != ENOENT) {
+        //pthread_mutex_lock(&cmd_lock);
+        fprintf(stderr, "Error removing fifo %s: %s\n", fifo_pathname, strerror(errno));
+        //pthread_mutex_unlock(&cmd_lock);
+        return 1;
+    }
+
+    if (mkfifo(fifo_pathname, 0666) != 0) {
+        //pthread_mutex_lock(&cmd_lock);
+        fprintf(stderr, "Error creating fifo %s: %s\n", fifo_pathname, strerror(errno));
+        //pthread_mutex_unlock(&cmd_lock);
+        return 1;
+    }
+
+    int fifo_fd = open(fifo_pathname, O_RDWR);
+    if (fifo_fd == -1) {
+        //pthread_mutex_lock(&cmd_lock);
+        fprintf(stderr, "Error opening fifo %s: %s\n", fifo_pathname, strerror(errno));
+        //pthread_mutex_unlock(&cmd_lock);
+        return 1;
+    }
+
     // Random seed for any random movements
     srand((unsigned int)time(NULL));
 
@@ -168,7 +198,7 @@ int main(int argc, char** argv) {
 
     open_debug_file("debug.log");
 
-    terminal_init();
+    //terminal_init();
     
     int accumulated_points = 0;
     bool end_game = false;
@@ -185,8 +215,8 @@ int main(int argc, char** argv) {
 
         if (strcmp(dot, ".lvl") == 0) {
             load_level(&game_board, entry->d_name, argv[1], accumulated_points);
-            draw_board(&game_board, DRAW_MENU);
-            refresh_screen();
+            //draw_board(&game_board, DRAW_MENU);
+            //refresh_screen();
 
             while(true) {
                 pthread_t ncurses_tid, pacman_tid;
@@ -203,7 +233,7 @@ int main(int argc, char** argv) {
                     arg->ghost_index = i;
                     pthread_create(&ghost_tids[i], NULL, ghost_thread, (void*) arg);
                 }
-                pthread_create(&ncurses_tid, NULL, ncurses_thread, (void*) &game_board);
+                //pthread_create(&ncurses_tid, NULL, ncurses_thread, (void*) &game_board);
 
                 int *retval;
                 pthread_join(pacman_tid, (void**)&retval);
@@ -212,7 +242,7 @@ int main(int argc, char** argv) {
                 thread_shutdown = 1;
                 pthread_rwlock_unlock(&game_board.state_lock);
 
-                pthread_join(ncurses_tid, NULL);
+                //pthread_join(ncurses_tid, NULL);
                 for (int i = 0; i < game_board.n_ghosts; i++) {
                     pthread_join(ghost_tids[i], NULL);
                 }
@@ -223,7 +253,7 @@ int main(int argc, char** argv) {
                 free(retval);
 
                 if(result == NEXT_LEVEL) {
-                    screen_refresh(&game_board, DRAW_WIN);
+                    //screen_refresh(&game_board, DRAW_WIN);
                     sleep_ms(game_board.tempo);
                     break;
                 }
@@ -248,7 +278,7 @@ int main(int argc, char** argv) {
                                 int code = WEXITSTATUS(status);
                                 
                                 if (code == 1) {
-                                    terminal_init();
+                                    //terminal_init();
                                     debug("[%d] Save Resuming...\n", getpid());
                                 }
                                 else { // End game or error
@@ -257,7 +287,7 @@ int main(int argc, char** argv) {
                                 }
                             }
                         } else {
-                            terminal_init();
+                            //terminal_init();
                             debug("Child process\n");
                         }
 
@@ -268,7 +298,7 @@ int main(int argc, char** argv) {
 
                 if(result == LOAD_BACKUP) {
                     if(getpid() != parent_process) {
-                        terminal_cleanup();
+                        //terminal_cleanup();
                         unload_level(&game_board);
                         
                         close_debug_file();
@@ -286,13 +316,13 @@ int main(int argc, char** argv) {
                 }
 
                 if(result == QUIT_GAME) {
-                    screen_refresh(&game_board, DRAW_GAME_OVER); 
+                    //screen_refresh(&game_board, DRAW_GAME_OVER); 
                     sleep_ms(game_board.tempo);
                     end_game = true;
                     break;
                 }
       
-                screen_refresh(&game_board, DRAW_MENU); 
+                //screen_refresh(&game_board, DRAW_MENU); 
 
                 accumulated_points = game_board.pacmans[0].points;      
             }
@@ -301,7 +331,7 @@ int main(int argc, char** argv) {
         }
     }    
 
-    terminal_cleanup();
+    //terminal_cleanup();
 
     close_debug_file();
 
