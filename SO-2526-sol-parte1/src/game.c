@@ -157,7 +157,7 @@ void* ghost_thread(void *arg) {
 }
 
 int main(int argc, char** argv) {
-    if (argc != 2) {
+    if (argc != 4) {
         printf("Usage: %s <level_directory>\n", argv[0]);
         return -1;
     }
