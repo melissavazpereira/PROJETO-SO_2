@@ -53,24 +53,40 @@ void* ghost_thread(void *arg) {
     }
 }
 
-// Thread que lê comandos do cliente
 void* pacman_thread(void *arg) {
     board_t *board = (board_t*) arg;
     pacman_t* pacman = &board->pacmans[0];
 
+    // Se tem movimentos E NÃO tem cliente, modo automático do servidor
+    if (pacman->n_moves > 0 && !session.active) {
+        debug("Server-side automatic mode\n");
+        while (pacman->current_move < pacman->n_moves) {
+            sleep_ms(board->tempo * (1 + pacman->passo));
+            
+            pthread_rwlock_wrlock(&board->state_lock);
+            if (thread_shutdown || !pacman->alive) {
+                pthread_rwlock_unlock(&board->state_lock);
+                pthread_exit(NULL);
+            }
+            
+            move_pacman(board, 0, &pacman->moves[pacman->current_move]);
+            pthread_rwlock_unlock(&board->state_lock);
+        }
+        pthread_exit(NULL); // Acabou os movimentos
+    }
+
+    // Modo cliente (manual ou automático do cliente)
+    debug("Client mode (manual or client-side automatic)\n");
     while (true) {
         if (!pacman->alive || thread_shutdown) {
             pthread_exit(NULL);
         }
 
-        // Ler comando do FIFO
-        // Formato: (char) OP_CODE=3 | (char) command
-        // ou: (char) OP_CODE=2 (disconnect)
         char op_code;
         ssize_t bytes = read(session.client_req_pipe, &op_code, 1);
         
         if (bytes <= 0) {
-            debug("Client disconnected (pipe closed)\n");
+            debug("Client disconnected\n");
             pthread_exit(NULL);
         }
 

@@ -82,15 +82,23 @@ int main(int argc, char *argv[]) {
 
     pthread_t receiver_thread_id;
     pthread_create(&receiver_thread_id, NULL, receiver_thread, NULL);
-
+    
     terminal_init();
     set_timeout(500);
     draw_board_client(board);
     refresh_screen();
-
+    
+    // ESPERAR pelo primeiro update para ter o tempo correto
+    if (cmd_fp) {
+        debug("Waiting for first board update to get tempo...\n");
+        while (tempo == 0) {
+            sleep_ms(50);  // Espera até o receiver_thread atualizar o tempo
+        }
+        debug("Tempo received: %d\n", tempo);
+    }
+    
     char command;
     int ch;
-
     while (1) {
 
         pthread_mutex_lock(&mutex);
@@ -101,28 +109,43 @@ int main(int argc, char *argv[]) {
         pthread_mutex_unlock(&mutex);
 
         if (cmd_fp) {
-            // Input from file
+    // Input from file
+    ch = fgetc(cmd_fp);
+    if (ch == EOF) {
+        rewind(cmd_fp);
+        continue;
+    }
+    
+    command = (char)ch;
+    
+    // Skip linhas que começam com PASSO ou POS
+    if (command == 'P') {
+        // Skip toda a linha
+        while (ch != '\n' && ch != EOF) {
             ch = fgetc(cmd_fp);
+        }
+        continue;
+    }
+    
+    if (command == '\n' || command == '\r' || command == '\0' || command == ' ')
+        continue;
+        
+    command = toupper(command);
+    
+    // Só aceita comandos WASD válidos
+    if (command != 'W' && command != 'A' && command != 'S' && 
+        command != 'D' && command != 'R' && command != 'Q') {
+        debug("Ignoring invalid command: '%c' (0x%02x)\n", command, (unsigned char)command);
+        continue;
+    }
+    
+    pthread_mutex_lock(&mutex);
+    int wait_for = tempo;
+    pthread_mutex_unlock(&mutex);
+    
+    debug("Sending valid command: '%c'\n", command);
+    sleep_ms(wait_for);
 
-            if (ch == EOF) {
-                // Restart at the start of the file
-                rewind(cmd_fp);
-                continue;
-            }
-
-            command = (char)ch;
-
-            if (command == '\n' || command == '\r' || command == '\0')
-                continue;
-
-            command = toupper(command);
-            
-            // Wait for tempo, to not overflow pipe with requests
-            pthread_mutex_lock(&mutex);
-            int wait_for = tempo;
-            pthread_mutex_unlock(&mutex);
-
-            sleep_ms(wait_for);
             
         } else {
             // Interactive input
