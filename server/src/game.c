@@ -51,7 +51,6 @@ void* ghost_thread(void *arg) {
         move_ghost(board, ghost_ind, &ghost->moves[ghost->current_move % ghost->n_moves]);
         pthread_rwlock_unlock(&board->state_lock);
     }
-    return NULL;
 }
 
 // Thread que lê comandos do cliente

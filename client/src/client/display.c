@@ -21,7 +21,7 @@ int terminal_init() {
     timeout(1000);
 
     // Make getch() non-blocking (return ERR if no input)
-    // nodelay(stdscr, TRUE); // Uncomment if non-blocking input is desired
+    nodelay(stdscr, TRUE); // Uncomment if non-blocking input is desired
 
     // Hide the cursor
     curs_set(0);
@@ -124,7 +124,7 @@ void draw_board_client(Board board) {
 
     // Draw score/status at the bottom
     attron(COLOR_PAIR(5));
-    mvprintw(start_row + board.height + 1, 0, "Points: %d",
+    mvprintw(start_row + board.height + 1, 0, "Points: %d\n",
              board.accumulated_points);
     attroff(COLOR_PAIR(5));
 }
