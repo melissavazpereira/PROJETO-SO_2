@@ -129,65 +129,7 @@ void draw_board_client(Board board) {
     attroff(COLOR_PAIR(5));
 }
 
-// Does exaclty the same as draw board but stores the output in a string instead of printing it
-char* get_board_displayed(board_t* board) {
-    size_t buffer_size = (board->width  * board->height) + 1;
-    char* output = malloc(buffer_size);
-    size_t pos = 0;
-    for (int y = 0; y < board->height; y++) {
-        for (int x = 0; x < board->width; x++) {
-            int index = y * board->width + x;
-            char ch = board->board[index].content;
-            int ghost_charged = 0;
 
-            for (int g = 0; g < board->n_ghosts; g++) {
-                ghost_t* ghost = &board->ghosts[g];
-                if (ghost->pos_x == x && ghost->pos_y == y) {
-                    if (ghost->charged)
-                        ghost_charged = 1;
-                    break;
-                }
-            }
-
-            // Draw with appropriate character
-            switch (ch) {
-                case 'W': // Wall
-                    output[pos++] = '#';
-                    break;
-
-                case 'P': // Pacman
-                    output[pos++] = 'C';
-                    break;
-
-                case 'M': // Monster/Ghost
-                    if (ghost_charged) {
-                        output[pos++] = 'G'; 
-                    } else {
-                        output[pos++] = 'M';
-                    }
-                    break;
-
-                case ' ': // Empty space
-                    if (board->board[index].has_portal) {
-                        output[pos++] = '@';
-                    }
-                    else if (board->board[index].has_dot) {
-                        output[pos++] = '.';
-                    }
-                    else
-                        output[pos++] = ' ';
-                    break;
-
-                default:
-                    output[pos++] = ch;
-                    break;
-            }
-        }
-    }
-    
-    output[pos] = '\0';
-    return output;
-}
 
 void draw_board(board_t* board, int mode) {
     // Clear the screen before redrawing
