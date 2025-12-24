@@ -10,21 +10,18 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <unistd.h>
-#include <pthread.h>
 
-Board board;
+Board global_board;
 bool stop_execution = false;
-int tempo;
+int tempo = 0;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void *receiver_thread(void *arg) {
     (void)arg;
-
     while (true) {
-        
-        Board board = receive_board_update();
+        Board new_board = receive_board_update();
 
-        if (!board.data || board.game_over == 1){
+        if (!new_board.data) {
             pthread_mutex_lock(&mutex);
             stop_execution = true;
             pthread_mutex_unlock(&mutex);
@@ -32,22 +29,26 @@ static void *receiver_thread(void *arg) {
         }
 
         pthread_mutex_lock(&mutex);
-        tempo = board.tempo;
+        if (global_board.data) free(global_board.data);
+        global_board = new_board;
+        tempo = global_board.tempo;
+
+        draw_board_client(global_board);
+        refresh_screen();
+
+        if (global_board.game_over || global_board.victory)
+            stop_execution = true;
+        
         pthread_mutex_unlock(&mutex);
 
-        draw_board_client(board);
-        refresh_screen();
+        if (stop_execution) break;
     }
-
-    debug("Returning receiver thread...\n");
     return NULL;
 }
 
 int main(int argc, char *argv[]) {
     if (argc != 3 && argc != 4) {
-        fprintf(stderr,
-            "Usage: %s <client_id> <register_pipe> [commands_file]\n",
-            argv[0]);
+        fprintf(stderr, "Usage: %s <client_id> <register_pipe> [commands_file]\n", argv[0]);
         return 1;
     }
 
@@ -55,128 +56,76 @@ int main(int argc, char *argv[]) {
     const char *register_pipe = argv[2];
     const char *commands_file = (argc == 4) ? argv[3] : NULL;
 
-    FILE *cmd_fp = NULL;
-    if (commands_file) {
-        cmd_fp = fopen(commands_file, "r");
-        if (!cmd_fp) {
-            perror("Failed to open commands file");
-            return 1;
-        }
-    }
+    FILE *cmd_fp = (commands_file) ? fopen(commands_file, "r") : NULL;
 
-    char req_pipe_path[MAX_PIPE_PATH_LENGTH];
-    char notif_pipe_path[MAX_PIPE_PATH_LENGTH];
-
-    snprintf(req_pipe_path, MAX_PIPE_PATH_LENGTH,
-             "/tmp/%s_request", client_id);
-
-    snprintf(notif_pipe_path, MAX_PIPE_PATH_LENGTH,
-             "/tmp/%s_notification", client_id);
+    char req_pipe_path[MAX_PIPE_PATH_LENGTH], notif_pipe_path[MAX_PIPE_PATH_LENGTH];
+    snprintf(req_pipe_path, MAX_PIPE_PATH_LENGTH, "/tmp/%s_request", client_id);
+    snprintf(notif_pipe_path, MAX_PIPE_PATH_LENGTH, "/tmp/%s_notification", client_id);
 
     open_debug_file("client-debug.log");
+    if (pacman_connect(req_pipe_path, notif_pipe_path, register_pipe) != 0) return 1;
 
-    if (pacman_connect(req_pipe_path, notif_pipe_path, register_pipe) != 0) {
-        perror("Failed to connect to server");
-        return 1;
-    }
+    memset(&global_board, 0, sizeof(Board));
+    pthread_t receiver_tid;
+    pthread_create(&receiver_tid, NULL, receiver_thread, NULL);
 
-    pthread_t receiver_thread_id;
-    pthread_create(&receiver_thread_id, NULL, receiver_thread, NULL);
-    
     terminal_init();
-    set_timeout(500);
-    draw_board_client(board);
-    refresh_screen();
-    
-    // ESPERAR pelo primeiro update para ter o tempo correto
-    if (cmd_fp) {
-        debug("Waiting for first board update to get tempo...\n");
-        while (tempo == 0) {
-            sleep_ms(50);  // Espera até o receiver_thread atualizar o tempo
-        }
-        debug("Tempo received: %d\n", tempo);
-    }
-    
-    char command;
-    int ch;
-    while (1) {
 
+    while (true) {
         pthread_mutex_lock(&mutex);
-        if (stop_execution) {
+        bool should_exit = stop_execution;
+        int wait_t = tempo;
+        pthread_mutex_unlock(&mutex);
+
+        if (should_exit) break;
+
+        char command = '\0';
+        if (cmd_fp) {
+            int ch = fgetc(cmd_fp);
+            if (ch == EOF) { rewind(cmd_fp); continue; }
+            if (ch == 'P') { while (ch != '\n' && ch != EOF) ch = fgetc(cmd_fp); continue; }
+            if (isspace(ch)) continue;
+            command = toupper((char)ch);
+        } else {
+            command = toupper(get_input());
+        }
+
+        if (command == '\0') continue;
+        
+        pacman_play(command);
+        
+        if (command == 'Q') {
+            pthread_mutex_lock(&mutex);
+            stop_execution = true;
             pthread_mutex_unlock(&mutex);
             break;
         }
-        pthread_mutex_unlock(&mutex);
-
-        if (cmd_fp) {
-    // Input from file
-    ch = fgetc(cmd_fp);
-    if (ch == EOF) {
-        rewind(cmd_fp);
-        continue;
-    }
-    
-    command = (char)ch;
-    
-    // Skip linhas que começam com PASSO ou POS
-    if (command == 'P') {
-        // Skip toda a linha
-        while (ch != '\n' && ch != EOF) {
-            ch = fgetc(cmd_fp);
-        }
-        continue;
-    }
-    
-    if (command == '\n' || command == '\r' || command == '\0' || command == ' ')
-        continue;
         
-    command = toupper(command);
-    
-    // Só aceita comandos WASD válidos
-    if (command != 'W' && command != 'A' && command != 'S' && 
-        command != 'D' && command != 'R' && command != 'Q') {
-        debug("Ignoring invalid command: '%c' (0x%02x)\n", command, (unsigned char)command);
-        continue;
-    }
-    
-    pthread_mutex_lock(&mutex);
-    int wait_for = tempo;
-    pthread_mutex_unlock(&mutex);
-    
-    debug("Sending valid command: '%c'\n", command);
-    sleep_ms(wait_for);
-
-            
-        } else {
-            // Interactive input
-            command = get_input();
-            command = toupper(command);
-        }
-
-        if (command == '\0')
-            continue;
-
-        if (command == 'Q') {
-            debug("Client pressed 'Q', quitting game\n");
-            break;
-        }
-
-        debug("Command: %c\n", command);
-
-        pacman_play(command);
-
+        if (wait_t > 0) sleep_ms(wait_t);
     }
 
+    // --- FINALIZAÇÃO ---
     pacman_disconnect();
+    pthread_join(receiver_tid, NULL);
 
-    pthread_join(receiver_thread_id, NULL);
+    // [IMPORTANTE] Garantir que a board final é desenhada antes do sleep
+    pthread_mutex_lock(&mutex);
+    if (global_board.data && (global_board.game_over || global_board.victory)) {
+        draw_board_client(global_board);
+        refresh_screen();
+        pthread_mutex_unlock(&mutex);
+        
+        // Pausa curta apenas para ver a mensagem
+        sleep_ms(2000); 
+    } else {
+        pthread_mutex_unlock(&mutex);
+    }
 
-    if (cmd_fp)
-        fclose(cmd_fp);
-
-    pthread_mutex_destroy(&mutex);
-
-    terminal_cleanup();
+    if (cmd_fp) fclose(cmd_fp);
+    if (global_board.data) free(global_board.data);
+    
+    terminal_cleanup(); // Restaura o terminal para poderes escrever de novo
+    close_debug_file();
 
     return 0;
 }

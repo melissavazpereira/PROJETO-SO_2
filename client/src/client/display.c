@@ -124,7 +124,7 @@ void draw_board_client(Board board) {
 
     // Draw score/status at the bottom
     attron(COLOR_PAIR(5));
-    mvprintw(start_row + board.height + 1, 0, "Points: %d\n",
+    mvprintw(start_row + board.height + 1, 0, "Points: %d",
              board.accumulated_points);
     attroff(COLOR_PAIR(5));
 }
