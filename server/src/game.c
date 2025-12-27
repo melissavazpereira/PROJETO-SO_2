@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <stdio.h>
 #include <semaphore.h>
+#include <signal.h>
 
 #define BUFFER_SIZE 10
 
@@ -66,6 +67,7 @@ static session_data_t *sessions;
 static int max_games;
 static char *levels_dir;
 static pthread_mutex_t sessions_mutex = PTHREAD_MUTEX_INITIALIZER;
+static volatile sig_atomic_t sigusr1_received = 0;
 
 // ============================================================================
 // BUFFER PRODUTOR-CONSUMIDOR
@@ -553,6 +555,11 @@ void* session_worker_thread(void *arg) {
     int worker_id = *(int*)arg;
     free(arg);
 
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    pthread_sigmask(SIG_BLOCK, &set, NULL);
+
     debug("Worker %d started\n", worker_id);
 
     while (1) {
@@ -680,12 +687,32 @@ void* session_worker_thread(void *arg) {
     return NULL;
 }
 
+
+
+void sigusr1_handler(int sig) {
+    (void)sig;
+    sigusr1_received = 1;
+}
+
+
 // ============================================================================
 // THREAD ANFITRIÃ (recebe pedidos de conexão)
 // ============================================================================
 
 void* host_thread(void *arg) {
     char *fifo_pathname = (char*)arg;
+
+        sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    pthread_sigmask(SIG_UNBLOCK, &set, NULL);
+    
+    struct sigaction sa;
+    sa.sa_handler = sigusr1_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGUSR1, &sa, NULL);
+
 
     debug("Host thread: Opening server FIFO %s\n", fifo_pathname);
 
@@ -698,10 +725,61 @@ void* host_thread(void *arg) {
     debug("Host thread: Listening for connections\n");
 
     while (1) {
+        // Verificar se recebeu SIGUSR1
+        if (sigusr1_received) {
+            sigusr1_received = 0;
+            
+            debug("SIGUSR1 received, generating top 5 clients file\n");
+            
+            FILE *f = fopen("top5_clients.txt", "w");
+            if (f) {
+                fprintf(f, "=== TOP 5 CLIENTS BY SCORE ===\n\n");
+                
+                typedef struct { int id; int points; } client_score_t;
+                client_score_t scores[max_games];
+                int count = 0;
+                
+                pthread_mutex_lock(&sessions_mutex);
+                for (int i = 0; i < max_games; i++) {
+                    if (sessions[i].active) {
+                        scores[count].id = i;
+                        scores[count].points = sessions[i].board.pacmans[0].points;
+                        count++;
+                    }
+                }
+                pthread_mutex_unlock(&sessions_mutex);
+                
+                // Ordenar por pontos (selection sort)
+                for (int i = 0; i < count - 1; i++) {
+                    for (int j = 0; j < count - i - 1; j++) {
+                        if (scores[j].points < scores[j + 1].points) {
+                            client_score_t temp = scores[j];
+                            scores[j] = scores[j + 1];
+                            scores[j + 1] = temp;
+                        }
+                    }
+                }
+                
+                int limit = count < 5 ? count : 5;
+                for (int i = 0; i < limit; i++) {
+                    fprintf(f, "%d. Client ID %d - %d points\n", 
+                            i + 1, scores[i].id, scores[i].points);
+                }
+                
+                if (count == 0) {
+                    fprintf(f, "No active clients.\n");
+                }
+                
+                fclose(f);
+                printf("Top 5 clients file generated (top5_clients.txt)\n");
+            }
+        }
+
         char op_code;
         ssize_t bytes = read(server_pipe, &op_code, 1);
         
         if (bytes <= 0) {
+            if (errno == EINTR) continue;  // Interrompido por sinal
             debug("Host thread: Read error\n");
             continue;
         }
@@ -748,7 +826,7 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    printf("=== PacmanIST Server - Etapa 1.2 ===\n");
+    printf("=== PacmanIST Server - Projeto 2 ===\n");
     printf("Levels directory: %s\n", levels_dir);
     printf("Max parallel games: %d\n", max_games);
     printf("Register FIFO: %s\n\n", fifo_pathname);
@@ -762,6 +840,11 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Error creating fifo: %s\n", strerror(errno));
         return 1;
     }
+
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    pthread_sigmask(SIG_BLOCK, &set, NULL);
 
     // Inicializar buffer e sessões
     buffer_init(&req_buffer);
