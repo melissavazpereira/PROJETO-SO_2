@@ -13,7 +13,7 @@
 
 Board global_board;
 bool stop_execution = false;
-int tempo = 0;
+int game_tempo = 0;  // Valor padrão, será atualizado
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void *receiver_thread(void *arg) {
@@ -31,7 +31,7 @@ static void *receiver_thread(void *arg) {
         pthread_mutex_lock(&mutex);
         if (global_board.data) free(global_board.data);
         global_board = new_board;
-        tempo = global_board.tempo;
+        game_tempo = new_board.tempo;  // Atualizar tempo do jogo
 
         draw_board_client(global_board);
         refresh_screen();
@@ -41,7 +41,6 @@ static void *receiver_thread(void *arg) {
         
         pthread_mutex_unlock(&mutex);
 
-        if (stop_execution) break;
     }
     return NULL;
 }
@@ -69,12 +68,22 @@ int main(int argc, char *argv[]) {
     pthread_t receiver_tid;
     pthread_create(&receiver_tid, NULL, receiver_thread, NULL);
 
+    // Aguardar receber o primeiro board antes de inicializar o terminal
+    while (1) {
+        pthread_mutex_lock(&mutex);
+        int has_board = (global_board.data != NULL);
+        pthread_mutex_unlock(&mutex);
+        
+        if (has_board) break;
+        sleep_ms(50);  // Polling rápido apenas para o primeiro board
+    }
+
     terminal_init();
 
     while (true) {
         pthread_mutex_lock(&mutex);
         bool should_exit = stop_execution;
-        int wait_t = tempo;
+        int current_tempo = game_tempo;  // Ler o tempo atual do jogo
         pthread_mutex_unlock(&mutex);
 
         if (should_exit) break;
@@ -90,41 +99,46 @@ int main(int argc, char *argv[]) {
             command = toupper(get_input());
         }
 
-        if (command == '\0') continue;
+        if (command == '\0') {
+            // Sem input, aguardar um tick do jogo
+            sleep_ms(current_tempo);
+            continue;
+        }
         
         pacman_play(command);
         
         if (command == 'Q') {
             pthread_mutex_lock(&mutex);
-            stop_execution = true;
+            global_board.game_over = 1;
             pthread_mutex_unlock(&mutex);
             break;
         }
         
-        if (wait_t > 0) sleep_ms(wait_t);
+        // Aguardar um tick do jogo após processar comando
+        sleep_ms(current_tempo);
     }
 
     // --- FINALIZAÇÃO ---
     pacman_disconnect();
     pthread_join(receiver_tid, NULL);
 
-    // [IMPORTANTE] Garantir que a board final é desenhada antes do sleep
+    // Garantir que a board final é desenhada
     pthread_mutex_lock(&mutex);
     if (global_board.data && (global_board.game_over || global_board.victory)) {
         draw_board_client(global_board);
         refresh_screen();
         pthread_mutex_unlock(&mutex);
         
-        // Pausa curta apenas para ver a mensagem
-        sleep_ms(2000); 
+        // Pausa para ver a mensagem final (2 ticks do jogo)
+        sleep_ms(game_tempo * 2); 
     } else {
         pthread_mutex_unlock(&mutex);
     }
 
     if (cmd_fp) fclose(cmd_fp);
     if (global_board.data) free(global_board.data);
-    
-    terminal_cleanup(); // Restaura o terminal para poderes escrever de novo
+
+    terminal_cleanup();
     close_debug_file();
 
     return 0;

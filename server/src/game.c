@@ -51,7 +51,14 @@ typedef struct {
     int total_levels;
     int victory;
     int accumulated_points;
+    int level_change_pending;
+    int new_level_index;
 } session_data_t;
+
+
+int count_levels(char *levels_dir);
+int load_level_by_index(board_t *board, char *levels_dir, int level_index, int accumulated_points);
+
 
 // Variáveis globais
 static request_buffer_t req_buffer;
@@ -230,7 +237,8 @@ void* pacman_thread(void *arg) {
             pthread_rwlock_unlock(&board->state_lock);
 
             // Pacman morreu (fantasma matou) - NÃO sair imediatamente
-            if (result == DEAD_PACMAN) {
+            if (result == DEAD_PACMAN || pacman->alive == 0) {
+                sleep_ms(board->tempo);
                 debug("Client %d died - Game Over\n", session->client_id);
                 // pacman->alive já foi setado a 0 em move_pacman
                 // Deixar session_manager_thread enviar updates
@@ -239,33 +247,45 @@ void* pacman_thread(void *arg) {
             
             // Pacman atingiu o portal
             if (result == REACHED_PORTAL) {
+                sleep_ms(board->tempo);
                 pthread_mutex_lock(&session->session_lock);
-                
-                // Acumular pontos do nível atual
-                session->accumulated_points += pacman->points;
+
                 session->current_level++;
                 
-                debug("Client %d reached portal! Level %d/%d, Total points: %d\n", 
-                      session->client_id, session->current_level, session->total_levels, 
-                      session->accumulated_points);
+                debug("Client %d reached portal! Level %d/%d\n", 
+                    session->client_id, session->current_level, session->total_levels);
                 
-                // Verificar se era o último nível
                 if (session->current_level >= session->total_levels) {
-                    debug("Client %d completed all levels - VICTORY!\n", session->client_id);
                     session->victory = 1;
                     pthread_mutex_unlock(&session->session_lock);
-                    // NÃO sair - deixar session_manager enviar victory
-                    continue;
+                    continue;  // Deixar session_manager enviar vitória
+                } else {
+                    session->accumulated_points += board->pacmans[0].points;
                 }
                 
-                pthread_mutex_unlock(&session->session_lock);
+                session->level_change_pending = 1;
+                session->new_level_index = session->current_level;
                 
-                // Se não era o último nível, termina (sem suporte multi-nível ainda)
-                pthread_mutex_lock(&session->session_lock);
-                session->victory = 1;  // Considerar vitória por enquanto
                 pthread_mutex_unlock(&session->session_lock);
+
+                sleep_ms(board->tempo);
+                
+
+                while (1) {
+                    pthread_mutex_lock(&session->session_lock);
+                    if (!session->level_change_pending) {
+                        pthread_mutex_unlock(&session->session_lock);
+                        break;
+                    }
+                    pthread_mutex_unlock(&session->session_lock);
+                    sleep_ms(board->tempo);
+                }
+                
+                debug("Client %d: Level change complete\n", session->client_id);
                 continue;
             }
+
+            sleep_ms(board->tempo * (1 + pacman->passo));
         }
     }
 }
@@ -278,22 +298,71 @@ void* session_manager_thread(void *arg) {
     session_data_t *session = (session_data_t*) arg;
     board_t *board = &session->board;
 
-    debug("Session manager thread started for client %d\n", session->client_id);
-
     while (1) {
-        sleep_ms(board->tempo);
+        sleep_ms(50);  // Frequência de atualização
 
         pthread_mutex_lock(&session->session_lock);
+        
+        if (session->level_change_pending) {
+            int new_level = session->new_level_index;
+
+            
+            debug("Session manager: Changing to level %d\n", new_level);
+            
+            // Parar fantasmas
+            session->thread_shutdown = 1;
+            pthread_mutex_unlock(&session->session_lock);
+            
+            for (int i = 0; i < board->n_ghosts; i++) {
+                pthread_join(session->ghost_tids[i], NULL);
+            }
+            free(session->ghost_tids);
+            
+            // Descarregar nível atual
+            pthread_rwlock_wrlock(&board->state_lock);
+            unload_level(board);
+            pthread_rwlock_unlock(&board->state_lock);
+            
+            // Carregar novo nível
+            if (load_level_by_index(board, levels_dir, new_level, 0) != 0) {
+                debug("Session manager: Failed to load level %d\n", new_level);
+                pthread_mutex_lock(&session->session_lock);
+                session->thread_shutdown = 1;
+                pthread_mutex_unlock(&session->session_lock);
+                pthread_exit(NULL);
+            }
+            
+            // Reiniciar fantasmas com novo nível
+            pthread_mutex_lock(&session->session_lock);
+            session->thread_shutdown = 0;
+            session->ghost_tids = malloc(board->n_ghosts * sizeof(pthread_t));
+            
+            for (int i = 0; i < board->n_ghosts; i++) {
+                ghost_thread_arg_t *arg = malloc(sizeof(ghost_thread_arg_t));
+                arg->board = board;
+                arg->ghost_index = i;
+                arg->shutdown_flag = &session->thread_shutdown;
+                pthread_create(&session->ghost_tids[i], NULL, ghost_thread, arg);
+            }
+            
+            session->level_change_pending = 0;  // ✅ Sinalizar conclusão
+            pthread_mutex_unlock(&session->session_lock);
+            
+            debug("Session manager: Level %d loaded successfully\n", new_level);
+            continue;
+        }
+        
+        // Verificar se deve terminar
         if (session->thread_shutdown) {
             pthread_mutex_unlock(&session->session_lock);
-            debug("Session manager exiting for client %d\n", session->client_id);
             pthread_exit(NULL);
         }
         
         int victory = session->victory;
-        int total_points = session->accumulated_points;
+        int acc_points = session->accumulated_points;
         pthread_mutex_unlock(&session->session_lock);
 
+        // Ler estado do tabuleiro
         pthread_rwlock_rdlock(&board->state_lock);
         
         char op_code = OP_CODE_BOARD;
@@ -301,14 +370,16 @@ void* session_manager_thread(void *arg) {
         int height = board->height;
         int tempo = board->tempo;
         int game_over = !board->pacmans[0].alive;
-        int accumulated_points = total_points + board->pacmans[0].points;
+        int current_level_points = board->pacmans[0].points;
+        int total_points = acc_points + current_level_points;
+
 
         char *board_str = get_board_displayed(board);
         int board_size = width * height;
 
         pthread_rwlock_unlock(&board->state_lock);
 
-        // Enviar dados
+        // Enviar dados ao cliente
         int write_failed = 0;
         if (write(session->client_notif_pipe, &op_code, 1) <= 0 ||
             write(session->client_notif_pipe, &width, sizeof(int)) <= 0 ||
@@ -316,7 +387,7 @@ void* session_manager_thread(void *arg) {
             write(session->client_notif_pipe, &tempo, sizeof(int)) <= 0 ||
             write(session->client_notif_pipe, &victory, sizeof(int)) <= 0 ||
             write(session->client_notif_pipe, &game_over, sizeof(int)) <= 0 ||
-            write(session->client_notif_pipe, &accumulated_points, sizeof(int)) <= 0 ||
+            write(session->client_notif_pipe, &total_points, sizeof(int)) <= 0 ||
             write(session->client_notif_pipe, board_str, board_size) != board_size) {
             write_failed = 1;
         }
@@ -331,8 +402,9 @@ void* session_manager_thread(void *arg) {
             pthread_exit(NULL);
         }
 
+        // Se jogo terminou (vitória ou morte), aguardar um pouco e terminar
         if (game_over || victory) {
-            sleep_ms(board->tempo * 2);
+            sleep_ms(board->tempo);
             pthread_mutex_lock(&session->session_lock);
             session->thread_shutdown = 1;
             pthread_mutex_unlock(&session->session_lock);
@@ -381,10 +453,19 @@ void cleanup_session(session_data_t *session) {
     debug("Session cleanup complete for client %d\n", session->client_id);
 }
 
-int count_levels(char *levels_dir) {
-    DIR* level_dir = opendir(levels_dir);
-    if (!level_dir) return 0;
+static int compare_strings(const void *a, const void *b) {
+    return strcmp(*(const char **)a, *(const char **)b);
+}
 
+// Função auxiliar para obter lista ordenada de níveis
+static char** get_sorted_levels(char *levels_dir, int *count_out) {
+    DIR* level_dir = opendir(levels_dir);
+    if (!level_dir) {
+        *count_out = 0;
+        return NULL;
+    }
+
+    // Primeiro, contar quantos níveis existem
     struct dirent* entry;
     int count = 0;
     
@@ -395,38 +476,73 @@ int count_levels(char *levels_dir) {
         count++;
     }
 
-    closedir(level_dir);
-    return count;
-}
-
-int load_level_by_index(board_t *board, char *levels_dir, int level_index, int accumulated_points) {
-    DIR* level_dir = opendir(levels_dir);
-    if (!level_dir) {
-        debug("Failed to open levels directory: %s\n", levels_dir);
-        return -1;
+    if (count == 0) {
+        closedir(level_dir);
+        *count_out = 0;
+        return NULL;
     }
 
-    struct dirent* entry;
-    int current_index = 0;
-    int loaded = 0;
+    // Alocar array de strings
+    char **level_names = malloc(count * sizeof(char*));
     
+    // Voltar ao início do diretório
+    rewinddir(level_dir);
+    
+    // Ler novamente e armazenar os nomes
+    int i = 0;
     while ((entry = readdir(level_dir)) != NULL) {
         if (entry->d_name[0] == '.') continue;
         char *dot = strrchr(entry->d_name, '.');
         if (!dot || strcmp(dot, ".lvl") != 0) continue;
-
-        if (current_index == level_index) {
-            debug("Loading level %d: %s\n", level_index, entry->d_name);
-            if (load_level(board, entry->d_name, levels_dir, accumulated_points) == 0) {
-                loaded = 1;
-                break;
-            }
-        }
-        current_index++;
+        
+        level_names[i] = strdup(entry->d_name);
+        i++;
     }
 
     closedir(level_dir);
-    return loaded ? 0 : -1;
+
+    // Ordenar alfabeticamente
+    qsort(level_names, count, sizeof(char*), compare_strings);
+
+    *count_out = count;
+    return level_names;
+}
+
+// Função auxiliar para liberar lista de níveis
+static void free_level_names(char **level_names, int count) {
+    if (!level_names) return;
+    for (int i = 0; i < count; i++) {
+        free(level_names[i]);
+    }
+    free(level_names);
+}
+
+// Versão corrigida de count_levels
+int count_levels(char *levels_dir) {
+    int count;
+    char **level_names = get_sorted_levels(levels_dir, &count);
+    free_level_names(level_names, count);
+    return count;
+}
+
+// Versão corrigida de load_level_by_index
+int load_level_by_index(board_t *board, char *levels_dir, int level_index, int accumulated_points) {
+    int count;
+    char **level_names = get_sorted_levels(levels_dir, &count);
+    
+    if (!level_names || level_index < 0 || level_index >= count) {
+        debug("Failed to get sorted levels or invalid index: %d/%d\n", level_index, count);
+        free_level_names(level_names, count);
+        return -1;
+    }
+
+    debug("Loading level %d/%d: %s\n", level_index, count, level_names[level_index]);
+    
+    int result = load_level(board, level_names[level_index], levels_dir, accumulated_points);
+    
+    free_level_names(level_names, count);
+    
+    return result;
 }
 
 // ============================================================================
@@ -472,6 +588,8 @@ void* session_worker_thread(void *arg) {
         session->total_levels = count_levels(levels_dir);
         session->victory = 0;
         session->accumulated_points = 0;
+        session->level_change_pending = 0;
+        session->new_level_index = 0;   
 
         debug("Worker %d: Allocated session %d (total levels: %d)\n", 
               worker_id, session_id, session->total_levels);
