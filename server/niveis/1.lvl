@@ -1,5 +1,5 @@
 DIM 11 7
-TEMPO 1000
+TEMPO 100
 PAC pacman1.p
 MON fantasma.m
 XXXXXXXXXXX

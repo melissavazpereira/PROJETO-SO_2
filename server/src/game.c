@@ -1,6 +1,7 @@
 #include "board.h"
 #include "display_utils.h"
 #include "protocol.h"
+#include "parser.h"
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -58,8 +59,11 @@ typedef struct {
 } session_data_t;
 
 
-int count_levels(char *levels_dir);
-int load_level_by_index(board_t *board, char *levels_dir, int level_index, int accumulated_points);
+typedef struct {
+    board_t *board;
+    int ghost_index;
+    int *shutdown_flag;
+} ghost_thread_arg_t;
 
 
 // Variáveis globais
@@ -70,9 +74,6 @@ static char *levels_dir;
 static pthread_mutex_t sessions_mutex = PTHREAD_MUTEX_INITIALIZER;
 static volatile sig_atomic_t sigusr1_received = 0;
 
-// ============================================================================
-// BUFFER PRODUTOR-CONSUMIDOR
-// ============================================================================
 
 void buffer_init(request_buffer_t *buf) {
     buf->in = 0;
@@ -138,15 +139,6 @@ void buffer_destroy(request_buffer_t *buf) {
     sem_unlink(sem_full_name);
 }
 
-// ============================================================================
-// THREADS DOS FANTASMAS
-// ============================================================================
-
-typedef struct {
-    board_t *board;
-    int ghost_index;
-    int *shutdown_flag;
-} ghost_thread_arg_t;
 
 void* ghost_thread(void *arg) {
     ghost_thread_arg_t *ghost_arg = (ghost_thread_arg_t*) arg;
@@ -430,92 +422,6 @@ void cleanup_session(session_data_t *session) {
     
 }
 
-static int compare_strings(const void *a, const void *b) {
-    return strcmp(*(const char **)a, *(const char **)b);
-}
-
-// Função auxiliar para obter lista ordenada de níveis
-static char** get_sorted_levels(char *levels_dir, int *count_out) {
-    DIR* level_dir = opendir(levels_dir);
-    if (!level_dir) {
-        *count_out = 0;
-        return NULL;
-    }
-
-    // Primeiro, contar quantos níveis existem
-    struct dirent* entry;
-    int count = 0;
-    
-    while ((entry = readdir(level_dir)) != NULL) {
-        if (entry->d_name[0] == '.') continue;
-        char *dot = strrchr(entry->d_name, '.');
-        if (!dot || strcmp(dot, ".lvl") != 0) continue;
-        count++;
-    }
-
-    if (count == 0) {
-        closedir(level_dir);
-        *count_out = 0;
-        return NULL;
-    }
-
-    // Alocar array de strings
-    char **level_names = malloc(count * sizeof(char*));
-    
-    // Voltar ao início do diretório
-    rewinddir(level_dir);
-    
-    // Ler novamente e armazenar os nomes
-    int i = 0;
-    while ((entry = readdir(level_dir)) != NULL) {
-        if (entry->d_name[0] == '.') continue;
-        char *dot = strrchr(entry->d_name, '.');
-        if (!dot || strcmp(dot, ".lvl") != 0) continue;
-        
-        level_names[i] = strdup(entry->d_name);
-        i++;
-    }
-
-    closedir(level_dir);
-
-    // Ordenar alfabeticamente
-    qsort(level_names, count, sizeof(char*), compare_strings);
-
-    *count_out = count;
-    return level_names;
-}
-
-// Função auxiliar para liberar lista de níveis
-static void free_level_names(char **level_names, int count) {
-    if (!level_names) return;
-    for (int i = 0; i < count; i++) {
-        free(level_names[i]);
-    }
-    free(level_names);
-}
-
-// Versão corrigida de count_levels
-int count_levels(char *levels_dir) {
-    int count;
-    char **level_names = get_sorted_levels(levels_dir, &count);
-    free_level_names(level_names, count);
-    return count;
-}
-
-// Versão corrigida de load_level_by_index
-int load_level_by_index(board_t *board, char *levels_dir, int level_index, int accumulated_points) {
-    int count;
-    char **level_names = get_sorted_levels(levels_dir, &count);
-    
-    if (!level_names || level_index < 0 || level_index >= count) {
-        free_level_names(level_names, count);
-        return -1;
-    }
-    int result = load_level(board, level_names[level_index], levels_dir, accumulated_points);
-    free_level_names(level_names, count);
-    return result;
-}
-
 
 void* session_worker_thread(void *arg) {
     free(arg);
@@ -649,7 +555,7 @@ void sigusr1_handler(int sig) {
 void* host_thread(void *arg) {
     char *fifo_pathname = (char*)arg;
 
-        sigset_t set;
+    sigset_t set;
     sigemptyset(&set);
     sigaddset(&set, SIGUSR1);
     pthread_sigmask(SIG_UNBLOCK, &set, NULL);
@@ -760,11 +666,6 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    printf("=== PacmanIST Server - Projeto 2 ===\n");
-    printf("Levels directory: %s\n", levels_dir);
-    printf("Max parallel games: %d\n", max_games);
-    printf("Register FIFO: %s\n\n", fifo_pathname);
-
     srand(time(NULL));
     open_debug_file("server-debug.log");
 
@@ -784,7 +685,7 @@ int main(int argc, char** argv) {
     buffer_init(&req_buffer);
     sessions = calloc(max_games, sizeof(session_data_t));
 
-    printf("Server initialized. Waiting for connections...\n\n");
+    printf("Server initialized\n");
 
     // Criar threads trabalhadoras
     pthread_t *worker_tids = malloc(max_games * sizeof(pthread_t));
@@ -802,7 +703,7 @@ int main(int argc, char** argv) {
     pthread_join(host_tid, NULL);
 
     // Cleanup (nunca alcançado em operação normal)
-    printf("Server shutting down...\n");
+    printf("Server shutting down\n");
     
     for (int i = 0; i < max_games; i++) {
         if (sessions[i].active) {

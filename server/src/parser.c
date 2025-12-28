@@ -5,6 +5,8 @@
 #include "parser.h"
 #include "board.h"
 #include <fcntl.h>
+#include <dirent.h>
+#include <string.h>
 
 int read_level(board_t* board, char* filename, char* dirname) {
 
@@ -332,4 +334,71 @@ int read_line(int fd, char *buf) {
     if (n == -1) return -1;
     if (n == 0 && i == 0) return 0;
     return i;                         
+}
+
+
+
+
+static int compare_strings(const void *a, const void *b) {
+    return strcmp(*(const char **)a, *(const char **)b);
+}
+
+char** get_sorted_levels(char *levels_dir, int *count_out) {
+    DIR* level_dir = opendir(levels_dir);
+    if (!level_dir) { *count_out = 0; return NULL; }
+
+    struct dirent* entry;
+    int count = 0;
+
+    while ((entry = readdir(level_dir)) != NULL) {
+        if (entry->d_name[0] == '.') continue;
+        char *dot = strrchr(entry->d_name, '.');
+        if (!dot || strcmp(dot, ".lvl") != 0) continue;
+        count++;
+    }
+
+    if (count == 0) { closedir(level_dir); *count_out = 0; return NULL; }
+
+    char **level_names = malloc(count * sizeof(char*));
+    rewinddir(level_dir);
+
+    int i = 0;
+    while ((entry = readdir(level_dir)) != NULL) {
+        if (entry->d_name[0] == '.') continue;
+        char *dot = strrchr(entry->d_name, '.');
+        if (!dot || strcmp(dot, ".lvl") != 0) continue;
+        level_names[i++] = strdup(entry->d_name);
+    }
+
+    closedir(level_dir);
+    qsort(level_names, count, sizeof(char*), compare_strings);
+    *count_out = count;
+    return level_names;
+}
+
+void free_level_names(char **level_names, int count) {
+    if (!level_names) return;
+    for (int i = 0; i < count; i++) free(level_names[i]);
+    free(level_names);
+}
+
+int count_levels(char *levels_dir) {
+    int count;
+    char **level_names = get_sorted_levels(levels_dir, &count);
+    free_level_names(level_names, count);
+    return count;
+}
+
+int load_level_by_index(board_t *board, char *levels_dir, int level_index, int accumulated_points) {
+    int count;
+    char **level_names = get_sorted_levels(levels_dir, &count);
+
+    if (!level_names || level_index < 0 || level_index >= count) {
+        free_level_names(level_names, count);
+        return -1;
+    }
+
+    int result = load_level(board, level_names[level_index], levels_dir, accumulated_points);
+    free_level_names(level_names, count);
+    return result;
 }
