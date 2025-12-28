@@ -67,7 +67,11 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
   strncpy(req_path_buffer, req_pipe_path, MAX_PIPE_PATH_LENGTH);
   strncpy(notif_path_buffer, notif_pipe_path, MAX_PIPE_PATH_LENGTH);
 
+  int client_id;
+  sscanf(req_pipe_path, "/tmp/%d_request", &client_id);
+
   write(server_pipe, &op_code, sizeof(char));
+  write(server_pipe, &client_id, sizeof(int));
   write(server_pipe, req_path_buffer, MAX_PIPE_PATH_LENGTH);
   write(server_pipe, notif_path_buffer, MAX_PIPE_PATH_LENGTH);
 

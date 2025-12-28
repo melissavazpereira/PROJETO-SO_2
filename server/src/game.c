@@ -19,6 +19,7 @@
 
 // Estrutura para pedido de conexão
 typedef struct {
+    int client_id;
     char req_pipe_path[MAX_PIPE_PATH_LENGTH];
     char notif_pipe_path[MAX_PIPE_PATH_LENGTH];
 } connection_request_t;
@@ -179,13 +180,10 @@ void* pacman_thread(void *arg) {
     board_t *board = &session->board;
     pacman_t* pacman = &board->pacmans[0];
 
-    debug("Pacman thread started for client %d\n", session->client_id);
-
     while (1) {
         pthread_mutex_lock(&session->session_lock);
         if (!pacman->alive || session->thread_shutdown) {
             pthread_mutex_unlock(&session->session_lock);
-            debug("Pacman thread exiting for client %d\n", session->client_id);
             pthread_exit(NULL);
         }
         pthread_mutex_unlock(&session->session_lock);
@@ -194,7 +192,6 @@ void* pacman_thread(void *arg) {
         ssize_t bytes = read(session->client_req_pipe, &op_code, 1);
         
         if (bytes <= 0) {
-            debug("Client %d disconnected (read error)\n", session->client_id);
             pthread_mutex_lock(&session->session_lock);
             session->thread_shutdown = 1;
             pthread_mutex_unlock(&session->session_lock);
@@ -202,7 +199,6 @@ void* pacman_thread(void *arg) {
         }
 
         if (op_code == OP_CODE_DISCONNECT) {
-            debug("Client %d requested disconnect\n", session->client_id);
             pthread_mutex_lock(&session->session_lock);
             session->thread_shutdown = 1;
             pthread_mutex_unlock(&session->session_lock);
@@ -212,23 +208,19 @@ void* pacman_thread(void *arg) {
         if (op_code == OP_CODE_PLAY) {
             char command;
             if (read(session->client_req_pipe, &command, 1) <= 0) {
-                debug("Error reading command from client %d\n", session->client_id);
                 pthread_mutex_lock(&session->session_lock);
                 session->thread_shutdown = 1;
                 pthread_mutex_unlock(&session->session_lock);
                 pthread_exit(NULL);
             }
             
-            debug("Client %d command: %c\n", session->client_id, command);
 
             // Tratar comando Q como GAME OVER
             if (command == 'Q') {
-                debug("Client %d pressed Q - Game Over\n", session->client_id);
                 pthread_rwlock_wrlock(&board->state_lock);
                 pacman->alive = 0;  // Marcar como morto para mostrar game over
                 pthread_rwlock_unlock(&board->state_lock);
                 
-                // NÃO sair imediatamente - deixar session_manager enviar updates
                 continue;
             }
 
@@ -241,7 +233,6 @@ void* pacman_thread(void *arg) {
             // Pacman morreu (fantasma matou) - NÃO sair imediatamente
             if (result == DEAD_PACMAN || pacman->alive == 0) {
                 sleep_ms(board->tempo);
-                debug("Client %d died - Game Over\n", session->client_id);
                 // pacman->alive já foi setado a 0 em move_pacman
                 // Deixar session_manager_thread enviar updates
                 continue;
@@ -254,8 +245,6 @@ void* pacman_thread(void *arg) {
 
                 session->current_level++;
                 
-                debug("Client %d reached portal! Level %d/%d\n", 
-                    session->client_id, session->current_level, session->total_levels);
                 
                 if (session->current_level >= session->total_levels) {
                     session->victory = 1;
@@ -283,7 +272,6 @@ void* pacman_thread(void *arg) {
                     sleep_ms(board->tempo);
                 }
                 
-                debug("Client %d: Level change complete\n", session->client_id);
                 continue;
             }
 
@@ -292,9 +280,7 @@ void* pacman_thread(void *arg) {
     }
 }
 
-// ============================================================================
-// THREAD DE ATUALIZAÇÕES (envia estado do tabuleiro periodicamente)
-// ============================================================================
+
 
 void* session_manager_thread(void *arg) {
     session_data_t *session = (session_data_t*) arg;
@@ -308,8 +294,6 @@ void* session_manager_thread(void *arg) {
         if (session->level_change_pending) {
             int new_level = session->new_level_index;
 
-            
-            debug("Session manager: Changing to level %d\n", new_level);
             
             // Parar fantasmas
             session->thread_shutdown = 1;
@@ -327,7 +311,6 @@ void* session_manager_thread(void *arg) {
             
             // Carregar novo nível
             if (load_level_by_index(board, levels_dir, new_level, 0) != 0) {
-                debug("Session manager: Failed to load level %d\n", new_level);
                 pthread_mutex_lock(&session->session_lock);
                 session->thread_shutdown = 1;
                 pthread_mutex_unlock(&session->session_lock);
@@ -347,10 +330,9 @@ void* session_manager_thread(void *arg) {
                 pthread_create(&session->ghost_tids[i], NULL, ghost_thread, arg);
             }
             
-            session->level_change_pending = 0;  // ✅ Sinalizar conclusão
+            session->level_change_pending = 0;  
             pthread_mutex_unlock(&session->session_lock);
-            
-            debug("Session manager: Level %d loaded successfully\n", new_level);
+        
             continue;
         }
         
@@ -397,7 +379,6 @@ void* session_manager_thread(void *arg) {
         free(board_str);
 
         if (write_failed) {
-            debug("Write failed for client %d, exiting\n", session->client_id);
             pthread_mutex_lock(&session->session_lock);
             session->thread_shutdown = 1;
             pthread_mutex_unlock(&session->session_lock);
@@ -415,14 +396,9 @@ void* session_manager_thread(void *arg) {
     }
 }
 
-// ============================================================================
-// GESTÃO DE SESSÕES
-// ============================================================================
 
 void cleanup_session(session_data_t *session) {
     if (!session->active) return;
-
-    debug("Cleaning up session for client %d\n", session->client_id);
 
     pthread_mutex_lock(&session->session_lock);
     session->thread_shutdown = 1;
@@ -452,7 +428,6 @@ void cleanup_session(session_data_t *session) {
     pthread_mutex_destroy(&session->session_lock);
     session->active = 0;
     
-    debug("Session cleanup complete for client %d\n", session->client_id);
 }
 
 static int compare_strings(const void *a, const void *b) {
@@ -533,26 +508,16 @@ int load_level_by_index(board_t *board, char *levels_dir, int level_index, int a
     char **level_names = get_sorted_levels(levels_dir, &count);
     
     if (!level_names || level_index < 0 || level_index >= count) {
-        debug("Failed to get sorted levels or invalid index: %d/%d\n", level_index, count);
         free_level_names(level_names, count);
         return -1;
     }
-
-    debug("Loading level %d/%d: %s\n", level_index, count, level_names[level_index]);
-    
     int result = load_level(board, level_names[level_index], levels_dir, accumulated_points);
-    
     free_level_names(level_names, count);
-    
     return result;
 }
 
-// ============================================================================
-// THREAD TRABALHADORA (processa pedidos de conexão)
-// ============================================================================
 
 void* session_worker_thread(void *arg) {
-    int worker_id = *(int*)arg;
     free(arg);
 
     sigset_t set;
@@ -560,13 +525,11 @@ void* session_worker_thread(void *arg) {
     sigaddset(&set, SIGUSR1);
     pthread_sigmask(SIG_BLOCK, &set, NULL);
 
-    debug("Worker %d started\n", worker_id);
 
     while (1) {
         // Aguardar pedido de conexão
         connection_request_t req = buffer_remove(&req_buffer);
         
-        debug("Worker %d processing connection request\n", worker_id);
 
         // Encontrar slot livre
         pthread_mutex_lock(&sessions_mutex);
@@ -581,13 +544,12 @@ void* session_worker_thread(void *arg) {
         pthread_mutex_unlock(&sessions_mutex);
 
         if (session_id == -1) {
-            debug("Worker %d: No free session slots!\n", worker_id);
             continue;
         }
 
         session_data_t *session = &sessions[session_id];
         pthread_mutex_init(&session->session_lock, NULL);
-        session->client_id = session_id;
+        session->client_id = req.client_id;
         session->thread_shutdown = 0;
         session->client_req_pipe = -1;
         session->client_notif_pipe = -1;
@@ -598,14 +560,10 @@ void* session_worker_thread(void *arg) {
         session->level_change_pending = 0;
         session->new_level_index = 0;   
 
-        debug("Worker %d: Allocated session %d (total levels: %d)\n", 
-              worker_id, session_id, session->total_levels);
 
         // Abrir pipe de notificações
         session->client_notif_pipe = open(req.notif_pipe_path, O_WRONLY);
         if (session->client_notif_pipe == -1) {
-            debug("Worker %d: Error opening client notif pipe: %s\n", 
-                  worker_id, strerror(errno));
             pthread_mutex_lock(&sessions_mutex);
             session->active = 0;
             pthread_mutex_unlock(&sessions_mutex);
@@ -619,7 +577,6 @@ void* session_worker_thread(void *arg) {
         
         if (write(session->client_notif_pipe, &resp_op_code, 1) <= 0 ||
             write(session->client_notif_pipe, &result, 1) <= 0) {
-            debug("Worker %d: Error sending connection confirmation\n", worker_id);
             close(session->client_notif_pipe);
             pthread_mutex_lock(&sessions_mutex);
             session->active = 0;
@@ -631,8 +588,6 @@ void* session_worker_thread(void *arg) {
         // Abrir pipe de pedidos
         session->client_req_pipe = open(req.req_pipe_path, O_RDONLY);
         if (session->client_req_pipe == -1) {
-            debug("Worker %d: Error opening client req pipe: %s\n", 
-                  worker_id, strerror(errno));
             close(session->client_notif_pipe);
             pthread_mutex_lock(&sessions_mutex);
             session->active = 0;
@@ -646,8 +601,6 @@ void* session_worker_thread(void *arg) {
 
         // Carregar primeiro nível
         if (load_level_by_index(&session->board, levels_dir, 0, 0) != 0) {
-            debug("Worker %d: Failed to load level for session %d\n", 
-                  worker_id, session_id);
             close(session->client_req_pipe);
             close(session->client_notif_pipe);
             pthread_mutex_lock(&sessions_mutex);
@@ -658,8 +611,6 @@ void* session_worker_thread(void *arg) {
         }
 
         session->ghost_tids = malloc(session->board.n_ghosts * sizeof(pthread_t));
-
-        debug("Worker %d: Session %d started for client\n", worker_id, session_id);
 
         // Criar threads da sessão
         pthread_create(&session->pacman_tid, NULL, pacman_thread, session);
@@ -676,7 +627,6 @@ void* session_worker_thread(void *arg) {
         // Aguardar fim da sessão
         pthread_join(session->pacman_tid, NULL);
         
-        debug("Worker %d: Session %d finished, cleaning up\n", worker_id, session_id);
         cleanup_session(session);
         
         pthread_mutex_lock(&sessions_mutex);
@@ -695,9 +645,6 @@ void sigusr1_handler(int sig) {
 }
 
 
-// ============================================================================
-// THREAD ANFITRIÃ (recebe pedidos de conexão)
-// ============================================================================
 
 void* host_thread(void *arg) {
     char *fifo_pathname = (char*)arg;
@@ -714,26 +661,22 @@ void* host_thread(void *arg) {
     sigaction(SIGUSR1, &sa, NULL);
 
 
-    debug("Host thread: Opening server FIFO %s\n", fifo_pathname);
-
     int server_pipe = open(fifo_pathname, O_RDONLY);
     if (server_pipe == -1) {
         fprintf(stderr, "Error opening server pipe: %s\n", strerror(errno));
         return NULL;
     }
 
-    debug("Host thread: Listening for connections\n");
 
     while (1) {
         // Verificar se recebeu SIGUSR1
         if (sigusr1_received) {
             sigusr1_received = 0;
             
-            debug("SIGUSR1 received, generating top 5 clients file\n");
             
             FILE *f = fopen("top5_clients.txt", "w");
             if (f) {
-                fprintf(f, "=== TOP 5 CLIENTS BY SCORE ===\n\n");
+                fprintf(f, "Top 5 Clients Connected\n\n");
                 
                 typedef struct { int id; int points; } client_score_t;
                 client_score_t scores[max_games];
@@ -742,8 +685,8 @@ void* host_thread(void *arg) {
                 pthread_mutex_lock(&sessions_mutex);
                 for (int i = 0; i < max_games; i++) {
                     if (sessions[i].active) {
-                        scores[count].id = i;
-                        scores[count].points = sessions[i].board.pacmans[0].points;
+                        scores[count].id = sessions[i].client_id;
+                        scores[count].points = sessions[i].accumulated_points + sessions[i].board.pacmans[0].points;
                         count++;
                     }
                 }
@@ -780,25 +723,19 @@ void* host_thread(void *arg) {
         
         if (bytes <= 0) {
             if (errno == EINTR) continue;  // Interrompido por sinal
-            debug("Host thread: Read error\n");
             continue;
         }
 
         if (op_code != OP_CODE_CONNECT) {
-            debug("Host thread: Invalid opcode: %d\n", op_code);
             continue;
         }
 
         connection_request_t req;
-        if (read(server_pipe, req.req_pipe_path, MAX_PIPE_PATH_LENGTH) != MAX_PIPE_PATH_LENGTH ||
+        if (read(server_pipe, &req.client_id, sizeof(int)) != sizeof(int) ||
+            read(server_pipe, req.req_pipe_path, MAX_PIPE_PATH_LENGTH) != MAX_PIPE_PATH_LENGTH ||
             read(server_pipe, req.notif_pipe_path, MAX_PIPE_PATH_LENGTH) != MAX_PIPE_PATH_LENGTH) {
-            debug("Host thread: Error reading connection request\n");
             continue;
         }
-
-        debug("Host thread: New connection request received\n");
-        debug("  Req pipe: %s\n", req.req_pipe_path);
-        debug("  Notif pipe: %s\n", req.notif_pipe_path);
         
         buffer_insert(&req_buffer, req);
     }
@@ -807,9 +744,6 @@ void* host_thread(void *arg) {
     return NULL;
 }
 
-// ============================================================================
-// MAIN
-// ============================================================================
 
 int main(int argc, char** argv) {
     if (argc != 4) {

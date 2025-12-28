@@ -13,7 +13,7 @@
 
 Board global_board;
 bool stop_execution = false;
-int game_tempo = 0;  // Valor padrão, será atualizado
+int game_tempo = 0;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void *receiver_thread(void *arg) {
@@ -31,7 +31,7 @@ static void *receiver_thread(void *arg) {
         pthread_mutex_lock(&mutex);
         if (global_board.data) free(global_board.data);
         global_board = new_board;
-        game_tempo = new_board.tempo;  // Atualizar tempo do jogo
+        game_tempo = new_board.tempo;
 
         draw_board_client(global_board);
         refresh_screen();
@@ -75,7 +75,7 @@ int main(int argc, char *argv[]) {
         pthread_mutex_unlock(&mutex);
         
         if (has_board) break;
-        sleep_ms(50);  // Polling rápido apenas para o primeiro board
+        sleep_ms(50);
     }
 
     terminal_init();
@@ -118,7 +118,6 @@ int main(int argc, char *argv[]) {
         sleep_ms(current_tempo);
     }
 
-    // --- FINALIZAÇÃO ---
     pacman_disconnect();
     pthread_join(receiver_tid, NULL);
 

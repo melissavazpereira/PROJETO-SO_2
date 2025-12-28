@@ -1,9 +1,8 @@
-# --- Compilador e Flags Gerais ---
 CC = gcc
 STD_FLAGS = -std=c17 -D_POSIX_C_SOURCE=200809L
 LDFLAGS = -lncurses -lpthread
 
-# --- CLIENT Config ---
+
 C_DIR = client
 C_CFLAGS = $(STD_FLAGS) -g -Wall -Wextra
 C_INC = -I$(C_DIR)/include -Icommon
@@ -12,7 +11,7 @@ C_OBJ_DIR = $(C_DIR)/obj
 C_BIN_DIR = $(C_DIR)/bin
 C_TARGET = $(C_BIN_DIR)/client
 
-# --- SERVER Config ---
+
 S_DIR = server
 S_CFLAGS = $(STD_FLAGS) -g -Wall -Wextra -Werror
 S_INC = -I$(S_DIR)/include -I$(C_DIR)/include -Icommon
@@ -21,45 +20,43 @@ S_OBJ_DIR = $(S_DIR)/obj
 S_BIN_DIR = $(S_DIR)/bin
 S_TARGET = $(S_BIN_DIR)/Pacmanist
 
-# --- COMMON Config ---
+
 COMMON_DIR = common
 
-# --- Objetos (Caminhos específicos) ---
+
 OBJS_CLIENT = $(addprefix $(C_OBJ_DIR)/, client_main.o debug.o api.o display.o)
 OBJS_SERVER = $(addprefix $(S_OBJ_DIR)/, game.o board.o parser.o display_utils.o)
-# ✅ Removi debug.o do servidor (vê se precisas)
 
-# --- Regras Principais ---
+
 
 all: client_build server_build
 
-# Atalhos para o utilizador
+
 client: client_build
 server: server_build
 
-# Compilação do Executável do Cliente
+
 client_build: folders_client $(C_TARGET)
 
 $(C_TARGET): $(OBJS_CLIENT)
 	$(CC) $(C_CFLAGS) $^ -o $@ $(LDFLAGS)
 
-# Compilação do Executável do Servidor
+
 server_build: folders_server $(S_TARGET)
 
 $(S_TARGET): $(OBJS_SERVER)
 	$(CC) $(S_CFLAGS) $^ -o $@ $(LDFLAGS)
 
-# --- Regras de Compilação de Objetos ---
 
-# Objetos do Cliente (tudo de client/src/client/)
+
 $(C_OBJ_DIR)/%.o: $(C_SRC_DIR)/%.c
 	$(CC) $(C_INC) $(C_CFLAGS) -c $< -o $@
 
-# Objetos do Servidor (de server/src/)
+
 $(S_OBJ_DIR)/%.o: $(S_SRC_DIR)/%.c
 	$(CC) $(S_INC) $(S_CFLAGS) -c $< -o $@
 
-# Objetos do COMMON para o SERVIDOR
+
 $(S_OBJ_DIR)/board.o: $(S_SRC_DIR)/board.c
 	$(CC) $(S_INC) $(S_CFLAGS) -c $< -o $@
 
@@ -69,7 +66,6 @@ $(S_OBJ_DIR)/parser.o: $(S_SRC_DIR)/parser.c
 $(S_OBJ_DIR)/display_utils.o: $(COMMON_DIR)/display_utils.c
 	$(CC) $(S_INC) $(S_CFLAGS) -c $< -o $@
 
-# --- Comandos Adicionais ---
 
 run: server_build
 	./$(S_TARGET) $(ARGS)
