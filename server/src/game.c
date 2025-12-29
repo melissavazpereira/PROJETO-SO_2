@@ -2,6 +2,7 @@
 #include "display_utils.h"
 #include "protocol.h"
 #include "parser.h"
+#include "buffer.h"
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -16,25 +17,6 @@
 #include <semaphore.h>
 #include <signal.h>
 
-#define BUFFER_SIZE 10
-
-// Estrutura para pedido de conexão
-typedef struct {
-    int client_id;
-    char req_pipe_path[MAX_PIPE_PATH_LENGTH];
-    char notif_pipe_path[MAX_PIPE_PATH_LENGTH];
-} connection_request_t;
-
-// Buffer produtor-consumidor
-typedef struct {
-    connection_request_t requests[BUFFER_SIZE];
-    int in;
-    int out;
-    int count;
-    pthread_mutex_t mutex;
-    sem_t *empty;
-    sem_t *full;
-} request_buffer_t;
 
 // Estrutura para dados de sessão
 typedef struct {
@@ -75,71 +57,6 @@ static pthread_mutex_t sessions_mutex = PTHREAD_MUTEX_INITIALIZER;
 static volatile sig_atomic_t sigusr1_received = 0;
 
 
-void buffer_init(request_buffer_t *buf) {
-    buf->in = 0;
-    buf->out = 0;
-    buf->count = 0;
-    pthread_mutex_init(&buf->mutex, NULL);
-    
-    char sem_empty_name[64];
-    char sem_full_name[64];
-    snprintf(sem_empty_name, sizeof(sem_empty_name), "/pacman_empty_%d", getpid());
-    snprintf(sem_full_name, sizeof(sem_full_name), "/pacman_full_%d", getpid());
-    
-    sem_unlink(sem_empty_name);
-    sem_unlink(sem_full_name);
-    
-    buf->empty = sem_open(sem_empty_name, O_CREAT | O_EXCL, 0644, BUFFER_SIZE);
-    buf->full = sem_open(sem_full_name, O_CREAT | O_EXCL, 0644, 0);
-    
-    if (buf->empty == SEM_FAILED || buf->full == SEM_FAILED) {
-        perror("sem_open failed");
-        exit(1);
-    }
-}
-
-void buffer_insert(request_buffer_t *buf, connection_request_t req) {
-    sem_wait(buf->empty);
-    pthread_mutex_lock(&buf->mutex);
-    
-    buf->requests[buf->in] = req;
-    buf->in = (buf->in + 1) % BUFFER_SIZE;
-    buf->count++;
-    
-    pthread_mutex_unlock(&buf->mutex);
-    sem_post(buf->full);
-}
-
-connection_request_t buffer_remove(request_buffer_t *buf) {
-    sem_wait(buf->full);
-    pthread_mutex_lock(&buf->mutex);
-    
-    connection_request_t req = buf->requests[buf->out];
-    buf->out = (buf->out + 1) % BUFFER_SIZE;
-    buf->count--;
-    
-    pthread_mutex_unlock(&buf->mutex);
-    sem_post(buf->empty);
-    
-    return req;
-}
-
-void buffer_destroy(request_buffer_t *buf) {
-    pthread_mutex_destroy(&buf->mutex);
-    
-    sem_close(buf->empty);
-    sem_close(buf->full);
-    
-    char sem_empty_name[64];
-    char sem_full_name[64];
-    snprintf(sem_empty_name, sizeof(sem_empty_name), "/pacman_empty_%d", getpid());
-    snprintf(sem_full_name, sizeof(sem_full_name), "/pacman_full_%d", getpid());
-    
-    sem_unlink(sem_empty_name);
-    sem_unlink(sem_full_name);
-}
-
-
 void* ghost_thread(void *arg) {
     ghost_thread_arg_t *ghost_arg = (ghost_thread_arg_t*) arg;
     board_t *board = ghost_arg->board;
@@ -163,9 +80,6 @@ void* ghost_thread(void *arg) {
     }
 }
 
-// ============================================================================
-// THREAD DO PACMAN (processa comandos do cliente)
-// ============================================================================
 
 void* pacman_thread(void *arg) {
     session_data_t *session = (session_data_t*) arg;
@@ -225,14 +139,11 @@ void* pacman_thread(void *arg) {
             // Pacman morreu (fantasma matou) - NÃO sair imediatamente
             if (result == DEAD_PACMAN || pacman->alive == 0) {
                 sleep_ms(board->tempo);
-                // pacman->alive já foi setado a 0 em move_pacman
-                // Deixar session_manager_thread enviar updates
                 continue;
             }
             
             // Pacman atingiu o portal
             if (result == REACHED_PORTAL) {
-                sleep_ms(board->tempo);
                 pthread_mutex_lock(&session->session_lock);
 
                 session->current_level++;
@@ -241,6 +152,7 @@ void* pacman_thread(void *arg) {
                 if (session->current_level >= session->total_levels) {
                     session->victory = 1;
                     pthread_mutex_unlock(&session->session_lock);
+                    sleep_ms(board->tempo);
                     continue;  // Deixar session_manager enviar vitória
                 } else {
                     session->accumulated_points += board->pacmans[0].points;
@@ -264,6 +176,7 @@ void* pacman_thread(void *arg) {
                     sleep_ms(board->tempo);
                 }
                 
+                sleep_ms(board->tempo);
                 continue;
             }
 
@@ -623,7 +536,7 @@ void* host_thread(void *arg) {
                 printf("Top 5 clients file generated (top5_clients.txt)\n");
             }
         }
-
+        
         char op_code;
         ssize_t bytes = read(server_pipe, &op_code, 1);
         
@@ -634,7 +547,7 @@ void* host_thread(void *arg) {
 
         if (op_code != OP_CODE_CONNECT) {
             continue;
-        }
+        }    
 
         connection_request_t req;
         if (read(server_pipe, &req.client_id, sizeof(int)) != sizeof(int) ||
@@ -669,7 +582,6 @@ int main(int argc, char** argv) {
     srand(time(NULL));
     open_debug_file("server-debug.log");
 
-    // Criar FIFO de registro
     unlink(fifo_pathname);
     if (mkfifo(fifo_pathname, 0666) != 0) {
         fprintf(stderr, "Error creating fifo: %s\n", strerror(errno));
@@ -681,13 +593,11 @@ int main(int argc, char** argv) {
     sigaddset(&set, SIGUSR1);
     pthread_sigmask(SIG_BLOCK, &set, NULL);
 
-    // Inicializar buffer e sessões
     buffer_init(&req_buffer);
     sessions = calloc(max_games, sizeof(session_data_t));
 
     printf("Server initialized\n");
 
-    // Criar threads trabalhadoras
     pthread_t *worker_tids = malloc(max_games * sizeof(pthread_t));
     for (int i = 0; i < max_games; i++) {
         int *id = malloc(sizeof(int));
@@ -695,14 +605,11 @@ int main(int argc, char** argv) {
         pthread_create(&worker_tids[i], NULL, session_worker_thread, id);
     }
 
-    // Criar thread anfitriã
     pthread_t host_tid;
     pthread_create(&host_tid, NULL, host_thread, fifo_pathname);
 
-    // Aguardar thread anfitriã (servidor nunca termina normalmente)
     pthread_join(host_tid, NULL);
 
-    // Cleanup (nunca alcançado em operação normal)
     printf("Server shutting down\n");
     
     for (int i = 0; i < max_games; i++) {
