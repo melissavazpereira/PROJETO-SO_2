@@ -88,7 +88,7 @@ void* pacman_thread(void *arg) {
 
     while (1) {
         pthread_mutex_lock(&session->session_lock);
-        if (!pacman->alive || session->thread_shutdown) {
+        if (!pacman->alive || session->thread_shutdown || session->victory) {
             pthread_mutex_unlock(&session->session_lock);
             pthread_exit(NULL);
         }
@@ -330,6 +330,7 @@ void cleanup_session(session_data_t *session) {
     }
     
     unload_level(&session->board);
+    memset(&session->board, 0, sizeof(board_t));
     pthread_mutex_destroy(&session->session_lock);
     session->active = 0;
     
