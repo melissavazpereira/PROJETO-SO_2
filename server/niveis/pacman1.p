@@ -1,3 +1,8 @@
 PASSO 0
 POS 1 1
-A
+S
+S
+D
+D
+D
+D
