@@ -20,7 +20,7 @@ S_TARGET = $(S_BIN_DIR)/Pacmanist
 
 COMMON_DIR = common
 
-C_SRCS = $(wildcard $(C_SRC_DIR)/*.c)
+C_SRCS = $(wildcard $(C_SRC_DIR)/*.c) $(wildcard $(COMMON_DIR)/*.c)
 S_SRCS = $(wildcard $(S_SRC_DIR)/*.c) $(wildcard $(COMMON_DIR)/*.c)
 
 OBJS_CLIENT = $(patsubst %.c,$(C_OBJ_DIR)/%,$(notdir $(C_SRCS)))
@@ -40,6 +40,9 @@ $(S_TARGET): $(OBJS_SERVER)
 	$(CC) $(S_CFLAGS) $^ -o $@ $(LDFLAGS)
 
 $(C_OBJ_DIR)/%.o: $(C_SRC_DIR)/%.c
+	$(CC) $(C_INC) $(C_CFLAGS) -c $< -o $@
+
+$(C_OBJ_DIR)/%.o: $(COMMON_DIR)/%.c
 	$(CC) $(C_INC) $(C_CFLAGS) -c $< -o $@
 
 $(S_OBJ_DIR)/%.o: $(S_SRC_DIR)/%.c

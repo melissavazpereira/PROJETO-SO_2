@@ -1,3 +1,3 @@
-PASSO 2
+PASSO 0
 POS 1 5
-S
+D

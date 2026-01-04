@@ -2,6 +2,7 @@
 #include "protocol.h"
 #include "display.h"
 #include "debug.h"
+#include "display_utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +11,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 Board global_board;
 bool stop_execution = false;
@@ -55,7 +57,8 @@ int main(int argc, char *argv[]) {
     const char *register_pipe = argv[2];
     const char *commands_file = (argc == 4) ? argv[3] : NULL;
 
-    FILE *cmd_fp = (commands_file) ? fopen(commands_file, "r") : NULL;
+    // Abrir ficheiro de comandos se existir (usando open para compatibilidade com read_line)
+    int cmd_fd = (commands_file) ? open(commands_file, O_RDONLY) : -1;
 
     char req_pipe_path[MAX_PIPE_PATH_LENGTH], notif_pipe_path[MAX_PIPE_PATH_LENGTH];
     snprintf(req_pipe_path, MAX_PIPE_PATH_LENGTH, "/tmp/%s_request", client_id);
@@ -75,10 +78,11 @@ int main(int argc, char *argv[]) {
         pthread_mutex_unlock(&mutex);
         
         if (has_board) break;
-        sleep_ms(50);
     }
 
     terminal_init();
+
+    char line_buffer[MAX_COMMAND_LENGTH];
 
     while (true) {
         pthread_mutex_lock(&mutex);
@@ -89,22 +93,59 @@ int main(int argc, char *argv[]) {
         if (should_exit) break;
 
         char command = '\0';
-        if (cmd_fp) {
-            int ch = fgetc(cmd_fp);
-            if (ch == EOF) { rewind(cmd_fp); continue; }
-            if (ch == 'P') { while (ch != '\n' && ch != EOF) ch = fgetc(cmd_fp); continue; }
-            if (isspace(ch)) continue;
-            command = toupper((char)ch);
+
+        if (cmd_fd != -1) {
+            // Leitura usando a sua função read_line
+            int bytes = read_line(cmd_fd, line_buffer);
+            
+            if (bytes > 0) {
+                if (line_buffer[0] == '#' || line_buffer[0] == '\0') continue;
+
+                if (strncmp(line_buffer, "PASSO", 5) == 0 || strncmp(line_buffer, "POS", 3) == 0) {
+                    continue;
+                }
+
+                // 3. Processar o comando
+                char *word = strtok(line_buffer, " \t\n");
+                if (!word) continue;
+
+                char cmd_char = toupper(word[0]);
+
+                // 4. Tratamento especial para o comando de espera 'T'
+                if (cmd_char == 'T') {
+                    char *arg = strtok(NULL, " \t\n");
+                    int turns = (arg) ? atoi(arg) : 1;
+                    
+                    for (int i = 0; i < turns; i++) {
+                        pthread_mutex_lock(&mutex);
+                        if (stop_execution) { pthread_mutex_unlock(&mutex); break; }
+                        int t = game_tempo;
+                        pthread_mutex_unlock(&mutex);
+
+                        pacman_play('T'); // Envia comando de espera
+                        sleep_ms(t);      // Aguarda o tempo do turno
+                    }
+                    continue; // Avança para a próxima linha do ficheiro
+                }
+                
+                command = cmd_char;
+            } else if (bytes == 0) {
+                // Fim do ficheiro: volta ao início para repetir movimentos
+                lseek(cmd_fd, 0, SEEK_SET);
+                continue;
+            }
         } else {
+            // Se não houver ficheiro, lê do teclado
             command = toupper(get_input());
         }
 
+        // Se não houver comando válido nesta iteração
         if (command == '\0') {
-            // Sem input, aguardar um tick do jogo
             sleep_ms(current_tempo);
             continue;
         }
         
+        // Envia comando (W, A, S, D, R, Q, etc.)
         pacman_play(command);
         
         if (command == 'Q') {
@@ -114,27 +155,25 @@ int main(int argc, char *argv[]) {
             break;
         }
         
-        // Aguardar um tick do jogo após processar comando
+        // Aguarda o tempo do jogo antes do próximo comando
         sleep_ms(current_tempo);
     }
 
+    // --- Finalização ---
     pacman_disconnect();
     pthread_join(receiver_tid, NULL);
 
-    // Garantir que a board final é desenhada
     pthread_mutex_lock(&mutex);
     if (global_board.data && (global_board.game_over || global_board.victory)) {
         draw_board_client(global_board);
         refresh_screen();
         pthread_mutex_unlock(&mutex);
-        
-        // Pausa para ver a mensagem final (2 ticks do jogo)
         sleep_ms(game_tempo * 2); 
     } else {
         pthread_mutex_unlock(&mutex);
     }
 
-    if (cmd_fp) fclose(cmd_fp);
+    if (cmd_fd != -1) close(cmd_fd);
     if (global_board.data) free(global_board.data);
 
     terminal_cleanup();

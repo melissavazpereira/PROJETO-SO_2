@@ -1,5 +1,7 @@
 #include "display_utils.h"
 #include <stdlib.h>
+#include <unistd.h>  
+#include <sys/types.h>
 
 char* get_board_displayed(board_t* board) {
     size_t buffer_size = (board->width * board->height) + 1;
@@ -67,4 +69,23 @@ char* get_board_displayed(board_t* board) {
     
     output[pos] = '\0';
     return output;
+}
+
+
+int read_line(int fd, char *buf) {
+    int i = 0;
+    char c;
+    ssize_t n;
+
+    while ((n = read(fd, &c, 1)) == 1) {
+        if (c == '\r') continue;
+        if (c == '\n') break;
+        buf[i++] = c;
+        if (i == MAX_COMMAND_LENGTH - 1) break;
+    }
+
+    buf[i] = '\0';
+    if (n == -1) return -1;
+    if (n == 0 && i == 0) return 0;
+    return i;                         
 }

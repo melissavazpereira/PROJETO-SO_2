@@ -67,8 +67,7 @@ void* ghost_thread(void *arg) {
     ghost_t* ghost = &board->ghosts[ghost_ind];
 
     while (1) {
-        sleep_ms(board->tempo * (1 + ghost->passo));
-
+        
         pthread_rwlock_rdlock(&board->state_lock);
         if (*shutdown) {
             pthread_rwlock_unlock(&board->state_lock);
@@ -77,6 +76,7 @@ void* ghost_thread(void *arg) {
         
         move_ghost(board, ghost_ind, &ghost->moves[ghost->current_move % ghost->n_moves]);
         pthread_rwlock_unlock(&board->state_lock);
+        sleep_ms(board->tempo * (1 + ghost->passo));
     }
 }
 
@@ -481,7 +481,7 @@ void* host_thread(void *arg) {
     sigaction(SIGUSR1, &sa, NULL);
 
 
-    int server_pipe = open(fifo_pathname, O_RDONLY);
+    int server_pipe = open(fifo_pathname, O_RDWR);
     if (server_pipe == -1) {
         fprintf(stderr, "Error opening server pipe: %s\n", strerror(errno));
         return NULL;
@@ -566,6 +566,7 @@ void* host_thread(void *arg) {
 
 
 int main(int argc, char** argv) {
+    signal(SIGPIPE, SIG_IGN);
     if (argc != 4) {
         printf("Usage: %s <levels_dir> <max_games> <register_pipe>\n", argv[0]);
         return -1;

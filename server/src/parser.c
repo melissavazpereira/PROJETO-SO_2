@@ -136,29 +136,27 @@ int read_level(board_t* board, char* filename, char* dirname) {
 
 int read_pacman(board_t* board, int points) {
     pacman_t* pacman = &board->pacmans[0];
+
     pacman->alive = 1;
     pacman->points = points;
+    pacman->waiting = 0;
+    pacman->passo = 0;
 
-    // no file was provided -> defaults 
+    // no file was provided -> defaults
     if (board->pacman_file[0] == '\0') {
-        pacman->passo = 0;
-        pacman->waiting = 0;
-        pacman->n_moves = 0; // user controlled
         // default position -> find first non occupied cell
-        for (int i = 0; i < board->height; i++) {
-            for (int j = 0; j < board->width; j++) {
-                int idx = i * board->width + j;
+        for (int y = 0; y < board->height; y++) {
+            for (int x = 0; x < board->width; x++) {
+                int idx = y * board->width + x;
                 if (board->board[idx].content == ' ') {
-                    pacman->pos_x = j;
-                    pacman->pos_y = i;
+                    pacman->pos_x = x;
+                    pacman->pos_y = y;
                     board->board[idx].content = 'P';
-                    goto pacman_inserted;
+                    return 0;
                 }
             }
         }
-
-        pacman_inserted:
-        return 0;
+        return -1;
     }
 
     int fd = open(board->pacman_file, O_RDONLY);
@@ -194,44 +192,6 @@ int read_pacman(board_t* board, int points) {
         else {
             break;
         }
-    }
-
-    // end of the file contains the moves
-    pacman->current_move = 0;
-    
-    // command here still holds the previous line
-    int move = 0;
-    while (read > 0 && move < MAX_MOVES) {
-        if (command[0]== '#' || command[0] == '\0') continue;
-        if (command[0] == 'A' ||
-            command[0] == 'D' ||
-            command[0] == 'W' ||
-            command[0] == 'S' ||
-            command[0] == 'R' ||
-            command[0] == 'G' ||  // FIXME: so para testar
-            command[0] == 'Q') {  // FIXME: so para testar
-                pacman->moves[move].command = command[0];
-                pacman->moves[move].turns = 1;
-                move += 1;
-        }
-        else if (command[0] == 'T' && command[1] == ' ') { 
-            int t = atoi(command+2);
-            if (t > 0) {
-                pacman->moves[move].command = command[0];
-                pacman->moves[move].turns = t;
-                pacman->moves[move].turns_left = t;
-                move += 1;
-            }
-        }
-
-        read = read_line(fd, command);
-    }
-    pacman->n_moves = move;
-
-    if (read == -1) {
-        debug("Failed reading line\n");
-        close(fd);
-        return -1;
     }
 
     close(fd);
@@ -317,26 +277,6 @@ int read_ghosts(board_t* board) {
 
     return 0;
 }
-
-int read_line(int fd, char *buf) {
-    int i = 0;
-    char c;
-    ssize_t n;
-
-    while ((n = read(fd, &c, 1)) == 1) {
-        if (c == '\r') continue;
-        if (c == '\n') break;
-        buf[i++] = c;
-        if (i == MAX_COMMAND_LENGTH - 1) break;
-    }
-
-    buf[i] = '\0';
-    if (n == -1) return -1;
-    if (n == 0 && i == 0) return 0;
-    return i;                         
-}
-
-
 
 
 static int compare_strings(const void *a, const void *b) {
