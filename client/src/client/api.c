@@ -1,6 +1,5 @@
 #include "api.h"
 #include "protocol.h"
-#include "debug.h"
 
 #include <fcntl.h>
 #include <unistd.h>
