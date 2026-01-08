@@ -2,7 +2,7 @@
 #include "protocol.h"
 #include "display.h"
 #include "debug.h"
-#include "display_utils.h"
+#include "utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>

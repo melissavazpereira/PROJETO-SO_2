@@ -1,5 +1,5 @@
-#ifndef DISPLAY_UTILS_H
-#define DISPLAY_UTILS_H
+#ifndef UTILS_H
+#define UTILS_H
 
 #include "board.h"
 #define MAX_COMMAND_LENGTH 256

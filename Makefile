@@ -64,4 +64,4 @@ folders_client:
 folders_server:
 	@mkdir -p $(S_OBJ_DIR) $(S_BIN_DIR)
 
-.PHONY: all client server client_build server_build run clean folders_client folders_server
+.PHONY: all clean run folders

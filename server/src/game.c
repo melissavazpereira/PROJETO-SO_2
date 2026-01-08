@@ -1,5 +1,5 @@
 #include "board.h"
-#include "display_utils.h"
+#include "utils.h"
 #include "protocol.h"
 #include "parser.h"
 #include "buffer.h"
@@ -144,6 +144,7 @@ void* pacman_thread(void *arg) {
             
             // Pacman atingiu o portal
             if (result == REACHED_PORTAL) {
+                sleep_ms(board->tempo);
                 pthread_mutex_lock(&session->session_lock);
 
                 session->current_level++;
