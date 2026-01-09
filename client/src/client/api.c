@@ -60,15 +60,16 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
 
 
   char op_code = OP_CODE_CONNECT;
-  char req_path_buffer[MAX_PIPE_PATH_LENGTH] = {0};
+  char req_path_buffer[MAX_PIPE_PATH_LENGTH] = {0}; 
   char notif_path_buffer[MAX_PIPE_PATH_LENGTH] = {0};
 
   strncpy(req_path_buffer, req_pipe_path, MAX_PIPE_PATH_LENGTH);
   strncpy(notif_path_buffer, notif_pipe_path, MAX_PIPE_PATH_LENGTH);
 
   int client_id;
-  sscanf(req_pipe_path, "/tmp/%d_request", &client_id);
+  sscanf(req_pipe_path, "/tmp/%d_request", &client_id); // Extract client ID from req_pipe_path
 
+  // Send connection request to server
   write(server_pipe, &op_code, sizeof(char));
   write(server_pipe, &client_id, sizeof(int));
   write(server_pipe, req_path_buffer, MAX_PIPE_PATH_LENGTH);
@@ -77,6 +78,7 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
 
   close(server_pipe);
 
+  // Open notification pipe for reading but wait until server opens it for writing
   session.notif_pipe = open(notif_pipe_path, O_RDONLY);
   if (session.notif_pipe == -1) {
     fprintf(stderr, "Error opening: %s\n", strerror(errno));
@@ -91,6 +93,7 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
   read(session.notif_pipe, &resp_op_code, sizeof(char));
   read(session.notif_pipe, &result, sizeof(char));
 
+  // Check if connection was accepted
   if (resp_op_code != OP_CODE_CONNECT || result != 0) {
     fprintf(stderr, "Connection refused: %s\n", strerror(errno));
     close(session.notif_pipe);
@@ -99,6 +102,7 @@ int pacman_connect(char const *req_pipe_path, char const *notif_pipe_path, char 
     return 1;
   }
 
+  // Open request pipe for writing but wait until server opens it for reading
   session.req_pipe = open(req_pipe_path, O_WRONLY);
   if (session.req_pipe == -1) {
     fprintf(stderr, "Error opening: %s\n", strerror(errno));
@@ -117,11 +121,12 @@ void pacman_play(char command) {
     return;
   }
 
-  char message[2];
+  char message[2]; // Op code + command
 
-  message[0] = OP_CODE_PLAY;
-  message[1] = command;
+  message[0] = OP_CODE_PLAY; 
+  message[1] = command; 
 
+  // Send play command to server 
   if (write(session.req_pipe, message, 2) != 2) {
     fprintf(stderr, "Error sending play command: %s\n", strerror(errno));
   }
@@ -135,7 +140,7 @@ int pacman_disconnect() {
   }
 
   char message = OP_CODE_DISCONNECT;
-  write(session.req_pipe, &message, 1);
+  write(session.req_pipe, &message, 1); // Send disconnect request to server
 
 
   // Close pipes
@@ -147,6 +152,7 @@ int pacman_disconnect() {
     close(session.notif_pipe);
   }
 
+  // Remove named pipes
   unlink(session.req_pipe_path);
   unlink(session.notif_pipe_path);
 
@@ -159,13 +165,14 @@ Board receive_board_update(void) {
     Board board = {0};
     char op_code;
 
-    int n = read(session.notif_pipe, &op_code, 1);
+    int n = read(session.notif_pipe, &op_code, 1); // Read operation code
 
     if (n <= 0 || op_code != OP_CODE_BOARD) {
       board.data = NULL;
       return board;
     }
 
+    // Read the parameters of the board
     read(session.notif_pipe, &board.width, sizeof(int));
     read(session.notif_pipe, &board.height, sizeof(int));
     read(session.notif_pipe, &board.tempo, sizeof(int));
@@ -173,11 +180,12 @@ Board receive_board_update(void) {
     read(session.notif_pipe, &board.game_over, sizeof(int));
     read(session.notif_pipe, &board.accumulated_points, sizeof(int));
 
-    int data_size = board.width * board.height;
-    board.data = malloc(data_size * sizeof(char)); 
+    int data_size = board.width * board.height; // Calculate the size of board data
+    board.data = malloc(data_size * sizeof(char)); // Allocate memory for board data
 
     if (board.data != NULL) {
-      int r = read(session.notif_pipe, board.data, data_size);
+      int r = read(session.notif_pipe, board.data, data_size); // Read board data
+      // If read fails, free allocated memory and set data to NULL
       if (r != data_size) {
         free(board.data);
         board.data = NULL;
