@@ -1,6 +1,7 @@
 DIM 11 7
 TEMPO 100
 PAC pacman1.p
+MON fantasma1.m
 XXXXXXXXXXX
 XoooooooooX
 XoooooooooX

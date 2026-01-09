@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include "parser.h"
 #include "board.h"
+#include "utils.h"
 #include <fcntl.h>
 #include <dirent.h>
 #include <string.h>
