@@ -12,8 +12,8 @@ int read_level(board_t* board, char* filename, char* dirname) {
 
     char fullname[MAX_FILENAME];
     strcpy(fullname, dirname);
-    strcat(fullname, "/");
-    strcat(fullname, filename);
+    strcat(fullname, "/"); 
+    strcat(fullname, filename); 
 
     int fd = open(fullname, O_RDONLY);
     if (fd == -1) {
@@ -28,7 +28,7 @@ int read_level(board_t* board, char* filename, char* dirname) {
     board->n_pacmans = 1;
 
     strcpy(board->level_name, filename);
-    *strrchr(board->level_name, '.') = '\0';
+    *strrchr(board->level_name, '.') = '\0'; // remove .lvl
 
     int read;
     while ((read = read_line(fd, command)) > 0) {
@@ -250,17 +250,17 @@ int read_ghosts(board_t* board) {
                 command[0] == 'S' ||
                 command[0] == 'R' ||
                 command[0] == 'C') {
-                    ghost->moves[move].command = command[0];
-                    ghost->moves[move].turns = 1; 
-                    move += 1;
+                    ghost->moves[move].command = command[0]; // Add the move to the array
+                    ghost->moves[move].turns = 1; // single turn
+                    move += 1; // increment move count
             }
             else if (command[0] == 'T' && command[1] == ' ') {
                 int t = atoi(command+2);
                 if (t > 0) {
                     ghost->moves[move].command = command[0];
-                    ghost->moves[move].turns = t;
-                    ghost->moves[move].turns_left = t;
-                    move += 1;
+                    ghost->moves[move].turns = t; // Set number of turns to wait
+                    ghost->moves[move].turns_left = t; // Initialize turns left
+                    move += 1; // increment move count
                 }
             }
             read = read_line(fd, command);
