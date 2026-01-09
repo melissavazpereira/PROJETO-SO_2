@@ -283,13 +283,17 @@ static int compare_strings(const void *a, const void *b) {
     return strcmp(*(const char **)a, *(const char **)b);
 }
 
-char** get_sorted_levels(char *levels_dir, int *count_out) {
+char** sort_levels(char *levels_dir, int *count_out) {
     DIR* level_dir = opendir(levels_dir);
-    if (!level_dir) { *count_out = 0; return NULL; }
+    if (!level_dir) { 
+        *count_out = 0; 
+        return NULL; 
+    }
 
     struct dirent* entry;
     int count = 0;
 
+    // Count .lvl files
     while ((entry = readdir(level_dir)) != NULL) {
         if (entry->d_name[0] == '.') continue;
         char *dot = strrchr(entry->d_name, '.');
@@ -297,12 +301,18 @@ char** get_sorted_levels(char *levels_dir, int *count_out) {
         count++;
     }
 
-    if (count == 0) { closedir(level_dir); *count_out = 0; return NULL; }
+    if (count == 0) { 
+        closedir(level_dir); 
+        *count_out = 0; 
+        return NULL; 
+    }
 
+    // Allocate memory in array for level names
     char **level_names = malloc(count * sizeof(char*));
-    rewinddir(level_dir);
+    rewinddir(level_dir); // Go back to the beginning of the directory
 
     int i = 0;
+    // Copy level names
     while ((entry = readdir(level_dir)) != NULL) {
         if (entry->d_name[0] == '.') continue;
         char *dot = strrchr(entry->d_name, '.');
@@ -311,33 +321,35 @@ char** get_sorted_levels(char *levels_dir, int *count_out) {
     }
 
     closedir(level_dir);
-    qsort(level_names, count, sizeof(char*), compare_strings);
+    qsort(level_names, count, sizeof(char*), compare_strings); // Sort the level names
     *count_out = count;
     return level_names;
 }
 
 void free_level_names(char **level_names, int count) {
     if (!level_names) return;
-    for (int i = 0; i < count; i++) free(level_names[i]);
-    free(level_names);
+    for (int i = 0; i < count; i++) free(level_names[i]); // Free each level name
+    free(level_names); // Free the array 
 }
 
 int count_levels(char *levels_dir) {
     int count;
-    char **level_names = get_sorted_levels(levels_dir, &count);
+    char **level_names = sort_levels(levels_dir, &count);
     free_level_names(level_names, count);
     return count;
 }
 
-int load_level_by_index(board_t *board, char *levels_dir, int level_index, int accumulated_points) {
+int load_sorted_level(board_t *board, char *levels_dir, int level_index, int accumulated_points) {
     int count;
-    char **level_names = get_sorted_levels(levels_dir, &count);
+    char **level_names = sort_levels(levels_dir, &count); // Get sorted level names
 
+    // Check for valid id 
     if (!level_names || level_index < 0 || level_index >= count) {
         free_level_names(level_names, count);
         return -1;
     }
 
+    // Load the specified level
     int result = load_level(board, level_names[level_index], levels_dir, accumulated_points);
     free_level_names(level_names, count);
     return result;
